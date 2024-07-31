@@ -25,8 +25,6 @@ fn test_ieee_fp16() {
             ColorType::Gray(16)
         );
         if let DecodingResult::F16(img_res) = decoder.read_image().unwrap() {
-            eprintln!("Num Pixels: {}", img_res.len());
-            eprintln!("Pixel 0: {}", img_res[0]);
             //assert_eq!(image_data, img_res);
         } else {
             panic!("Wrong data type");
