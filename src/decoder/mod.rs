@@ -1,6 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Seek};
 
+use crate::tags::{
+    CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor, SampleFormat,
+    Tag, Type,
+};
 use crate::{
     bytecast, ColorType, TiffError, TiffFormatError, TiffResult, TiffUnsupportedError, UsageError,
 };
@@ -8,11 +12,6 @@ use half::f16;
 
 use self::ifd::Directory;
 use self::image::Image;
-use crate::tags::{
-    CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor, SampleFormat,
-    Tag, Type,
-};
-
 use self::stream::{ByteOrder, EndianReader, SmartReader};
 
 pub mod ifd;
@@ -280,21 +279,21 @@ fn rev_hpredict_nsamp(buf: &mut [u8], bit_depth: u8, samples: usize) {
         9..=16 => {
             for i in (samples * 2..buf.len()).step_by(2) {
                 let v = u16::from_ne_bytes(buf[i..][..2].try_into().unwrap());
-                let p = u16::from_ne_bytes(buf[i - samples..][..2].try_into().unwrap());
+                let p = u16::from_ne_bytes(buf[i - 2 * samples..][..2].try_into().unwrap());
                 buf[i..][..2].copy_from_slice(&(v.wrapping_add(p)).to_ne_bytes());
             }
         }
         17..=32 => {
             for i in (samples * 4..buf.len()).step_by(4) {
                 let v = u32::from_ne_bytes(buf[i..][..4].try_into().unwrap());
-                let p = u32::from_ne_bytes(buf[i - samples..][..4].try_into().unwrap());
+                let p = u32::from_ne_bytes(buf[i - 4 * samples..][..4].try_into().unwrap());
                 buf[i..][..4].copy_from_slice(&(v.wrapping_add(p)).to_ne_bytes());
             }
         }
         33..=64 => {
             for i in (samples * 8..buf.len()).step_by(8) {
                 let v = u64::from_ne_bytes(buf[i..][..8].try_into().unwrap());
-                let p = u64::from_ne_bytes(buf[i - samples..][..8].try_into().unwrap());
+                let p = u64::from_ne_bytes(buf[i - 8 * samples..][..8].try_into().unwrap());
                 buf[i..][..8].copy_from_slice(&(v.wrapping_add(p)).to_ne_bytes());
             }
         }
@@ -924,6 +923,15 @@ impl<R: Read + Seek> Decoder<R> {
         self.get_tag(tag)?.into_string()
     }
 
+    /// Returns an iterator over all tags in the current image, along with their values.
+    pub fn tag_iter(&mut self) -> impl Iterator<Item = TiffResult<(Tag, ifd::Value)>> + '_ {
+        self.image.ifd.as_ref().unwrap().iter().map(|(tag, entry)| {
+            entry
+                .val(&self.limits, self.bigtiff, &mut self.reader)
+                .map(|value| (*tag, value))
+        })
+    }
+
     fn check_chunk_type(&self, expected: ChunkType) -> TiffResult<()> {
         if expected != self.image().chunk_type {
             return Err(TiffError::UsageError(UsageError::InvalidChunkType(
@@ -998,13 +1006,20 @@ impl<R: Read + Seek> Decoder<R> {
     }
 
     fn result_buffer(&self, width: usize, height: usize) -> TiffResult<DecodingResult> {
-        let buffer_size = match width
+        let bits_per_sample = self.image().bits_per_sample;
+
+        let row_samples = if bits_per_sample >= 8 {
+            width
+        } else {
+            ((((width as u64) * bits_per_sample as u64) + 7) / 8)
+                .try_into()
+                .map_err(|_| TiffError::LimitsExceeded)?
+        };
+
+        let buffer_size = row_samples
             .checked_mul(height)
             .and_then(|x| x.checked_mul(self.image().samples_per_pixel()))
-        {
-            Some(s) => s,
-            None => return Err(TiffError::LimitsExceeded),
-        };
+            .ok_or(TiffError::LimitsExceeded)?;
 
         let max_sample_bits = self.image().bits_per_sample;
         match self.image().sample_format {
