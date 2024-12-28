@@ -326,7 +326,7 @@ fn predict_f16(input: &mut [u8], output: &mut [u8], samples: usize) {
     for (i, chunk) in output.chunks_mut(2).enumerate() {
         chunk.copy_from_slice(&u16::to_ne_bytes(u16::from_be_bytes([
             input[i],
-            input[input.len() / 4 + i],
+            input[input.len() / 2 + i],
         ])));
     }
 }
