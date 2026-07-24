@@ -713,15 +713,31 @@ fn invert_colors(
 
 /// Re-bias CIE L*a*b* a/b channels from signed to unsigned encoding.
 ///
-/// CIELab (photometric=8) stores a/b as int8 where 0 is neutral.
-/// ICCLab (photometric=9) stores them as uint8 where 128 is neutral.
-/// Adding 128 (wrapping) converts between the two representations.
+/// CIELab (photometric=8) stores a/b as signed integers where 0 is neutral;
+/// ICCLab (photometric=9) stores them as unsigned with the neutral shifted to
+/// the middle of the range. The two differ by exactly half the sample range, so
+/// the conversion is a wrapping add of 2^(bits-1) — i.e. flipping the sign bit —
+/// applied per a/b sample. `bit_depth` is 8 or 16 (guaranteed by `colortype`);
+/// samples are in native byte order here (post `fix_endianness_and_predict`).
 /// See libtiff's `TIFFCIELabToXYZ` for reference (tif_color.c line 45
 /// @ 04884181e8903915038be553bfab404302d98ea0).
-fn cielab_to_icclab(buf: &mut [u8]) {
-    for [_, a, b] in buf.as_chunks_mut::<3>().0 {
-        *a = a.wrapping_add(128);
-        *b = b.wrapping_add(128);
+fn cielab_to_icclab(buf: &mut [u8], bit_depth: u8) {
+    match bit_depth {
+        16 => {
+            for pixel in buf.as_chunks_mut::<6>().0 {
+                // pixel is [L, a, b] as three native-endian u16 samples.
+                let (samples, _) = pixel.as_chunks_mut::<2>();
+                for s in &mut samples[1..=2] {
+                    *s = u16::from_ne_bytes(*s).wrapping_add(0x8000).to_ne_bytes();
+                }
+            }
+        }
+        _ => {
+            for [_, a, b] in buf.as_chunks_mut::<3>().0 {
+                *a = a.wrapping_add(128);
+                *b = b.wrapping_add(128);
+            }
+        }
     }
 }
 
@@ -739,7 +755,7 @@ fn post_process_row(
 ) -> TiffResult<()> {
     match photometric_interpretation {
         PhotometricInterpretation::WhiteIsZero => invert_colors(buf, color_type, sample_format)?,
-        PhotometricInterpretation::CIELab => cielab_to_icclab(buf),
+        PhotometricInterpretation::CIELab => cielab_to_icclab(buf, color_type.bit_depth()),
         _ => {}
     }
     Ok(())
