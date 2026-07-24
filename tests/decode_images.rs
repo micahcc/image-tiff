@@ -1,7 +1,7 @@
 extern crate tiff;
 
 use tiff::decoder::{ifd, Decoder, DecodingSampleBuffer};
-use tiff::tags::{ByteOrder, PhotometricInterpretation, Type};
+use tiff::tags::{ByteOrder, PhotometricInterpretation, SampleFormat, Type};
 use tiff::ColorType;
 
 use std::fs::File;
@@ -1062,31 +1062,46 @@ fn test_gray_u12_hpredict() {
 
 // ---- TransparencyMask ----
 
-/// Build a minimal uncompressed TIFF in memory with the given photometric interpretation.
-/// Returns a 2x2 image with the provided pixel data as a single strip.
+/// Build a minimal uncompressed 2x2 TIFF in memory, in the requested byte order,
+/// with the given photometric interpretation and the pixel data as a single strip.
+/// `sample_format` is emitted as a SampleFormat tag when `Some`; when `None` the
+/// tag is omitted (the decoder then defaults to unsigned). Pixel bytes must already
+/// be in `byte_order`.
 fn build_raw_tiff(
+    byte_order: ByteOrder,
     photometric: PhotometricInterpretation,
     bits_per_sample: u16,
     samples_per_pixel: u16,
+    sample_format: Option<SampleFormat>,
     pixel_data: &[u8],
 ) -> Vec<u8> {
+    let le = matches!(byte_order, ByteOrder::LittleEndian);
+    let put16 = |buf: &mut Vec<u8>, v: u16| {
+        if le {
+            buf.extend_from_slice(&v.to_le_bytes());
+        } else {
+            buf.extend_from_slice(&v.to_be_bytes());
+        }
+    };
+    let put32 = |buf: &mut Vec<u8>, v: u32| {
+        if le {
+            buf.extend_from_slice(&v.to_le_bytes());
+        } else {
+            buf.extend_from_slice(&v.to_be_bytes());
+        }
+    };
+
     let width: u16 = 2;
     let height: u16 = 2;
-    let num_tags: u16 = 8;
+    let num_tags: u16 = if sample_format.is_some() { 9 } else { 8 };
     let ifd_offset: u32 = 8;
     let ifd_size = 2 + (num_tags as u32) * 12 + 4;
     let strip_offset = 8 + ifd_size;
 
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"II");
-    buf.extend_from_slice(&42u16.to_le_bytes());
-    buf.extend_from_slice(&ifd_offset.to_le_bytes());
-    buf.extend_from_slice(&num_tags.to_le_bytes());
-
     // IFD entries (must be ascending tag order). Tag IDs stay raw for the
     // ascending-order property; the field type uses the `Type` enum.
-    for &(tag, typ, value) in &[
-        (256u16, Type::SHORT, width as u32),             // ImageWidth
+    let mut tags: Vec<(u16, Type, u32)> = vec![
+        (256, Type::SHORT, width as u32),                // ImageWidth
         (257, Type::SHORT, height as u32),               // ImageLength
         (258, Type::SHORT, bits_per_sample as u32),      // BitsPerSample
         (259, Type::SHORT, 1),                           // Compression = None
@@ -1094,14 +1109,33 @@ fn build_raw_tiff(
         (273, Type::LONG, strip_offset),                 // StripOffsets
         (277, Type::SHORT, samples_per_pixel as u32),    // SamplesPerPixel
         (279, Type::LONG, pixel_data.len() as u32),      // StripByteCounts
-    ] {
-        buf.extend_from_slice(&tag.to_le_bytes());
-        buf.extend_from_slice(&typ.to_u16().to_le_bytes());
-        buf.extend_from_slice(&1u32.to_le_bytes());
-        buf.extend_from_slice(&value.to_le_bytes());
+    ];
+    if let Some(sf) = sample_format {
+        tags.push((339, Type::SHORT, sf.to_u16() as u32)); // SampleFormat (tag 339 > 279)
     }
 
-    buf.extend_from_slice(&0u32.to_le_bytes()); // next IFD = 0
+    let mut buf = Vec::new();
+    buf.extend_from_slice(if le { b"II" } else { b"MM" });
+    put16(&mut buf, 42);
+    put32(&mut buf, ifd_offset);
+    put16(&mut buf, num_tags);
+
+    for (tag, typ, value) in tags {
+        put16(&mut buf, tag);
+        put16(&mut buf, typ.to_u16());
+        put32(&mut buf, 1); // count
+                            // A SHORT value is left-justified in the 4-byte value field (value in the
+                            // first two bytes, then padding); a LONG fills all four.
+        match typ {
+            Type::SHORT => {
+                put16(&mut buf, value as u16);
+                put16(&mut buf, 0);
+            }
+            _ => put32(&mut buf, value),
+        }
+    }
+
+    put32(&mut buf, 0); // next IFD = 0
     buf.extend_from_slice(pixel_data);
     buf
 }
@@ -1110,9 +1144,11 @@ fn build_raw_tiff(
 fn test_transparency_mask() {
     // 2x2 mask: values 0, 255, 128, 64
     let data = build_raw_tiff(
+        ByteOrder::LittleEndian,
         PhotometricInterpretation::TransparencyMask,
         8,
         1,
+        None,
         &[0, 255, 128, 64],
     );
     let mut decoder = Decoder::open(Cursor::new(&data)).unwrap();
@@ -1148,7 +1184,14 @@ fn test_cielab_decode() {
         0, 128, 128, // pixel 3: L=0, a=-128 (as i8), b=-128 (as i8)
     ];
 
-    let data = build_raw_tiff(PhotometricInterpretation::CIELab, 8, 3, &pixels);
+    let data = build_raw_tiff(
+        ByteOrder::LittleEndian,
+        PhotometricInterpretation::CIELab,
+        8,
+        3,
+        None,
+        &pixels,
+    );
     let mut decoder = Decoder::open(Cursor::new(&data)).unwrap();
     decoder.next_image().unwrap();
 
@@ -1181,4 +1224,120 @@ fn test_cielab_decode() {
         }
         _ => panic!("Expected U8 buffer"),
     }
+}
+
+#[test]
+fn test_cielab_decode_16() {
+    // 2x2 16-bit CIELab image: 3 u16 samples per pixel (L, a, b), a/b signed.
+    // Re-biasing maps signed a/b to unsigned by adding 0x8000 (wrapping):
+    //   0 -> 32768, +1000 -> 33768, -1000 -> 31768, -32768 -> 0, +32767 -> 65535.
+    let samples: [u16; 12] = [
+        32768, 0, 0, // pixel 0: L, a=0, b=0 (neutral)
+        65535, 1000, 1000, // pixel 1: a=+1000, b=+1000
+        10000, 64536, 64536, // pixel 2: a=-1000, b=-1000 (as u16)
+        0, 32768, 32767, // pixel 3: a=-32768, b=+32767 (as u16)
+    ];
+    let mut pixels = Vec::new();
+    for s in samples {
+        pixels.extend_from_slice(&s.to_le_bytes());
+    }
+
+    let data = build_raw_tiff(
+        ByteOrder::LittleEndian,
+        PhotometricInterpretation::CIELab,
+        16,
+        3,
+        None,
+        &pixels,
+    );
+    let mut decoder = Decoder::open(Cursor::new(&data)).unwrap();
+    decoder.next_image().unwrap();
+
+    assert_eq!(decoder.colortype().unwrap(), ColorType::Lab(16));
+
+    let result = decoder.read_image().unwrap();
+    match result {
+        DecodingSampleBuffer::U16(decoded) => {
+            assert_eq!(decoded.len(), 12); // 4 pixels * 3 channels
+
+            // L unchanged; a/b re-biased by +0x8000 (wrapping).
+            let expected: [u16; 12] = [
+                32768, 32768, 32768, // pixel 0
+                65535, 33768, 33768, // pixel 1
+                10000, 31768, 31768, // pixel 2
+                0, 0, 65535, // pixel 3
+            ];
+            assert_eq!(decoded, expected);
+        }
+        _ => panic!("Expected U16 buffer"),
+    }
+}
+
+#[test]
+fn test_cielab_decode_16_big_endian() {
+    // Same image and expected output as `test_cielab_decode_16`, but stored as a
+    // big-endian ("MM") TIFF. 16-bit is the case where byte order matters: the
+    // decoder must swap to native before the a/b re-bias, so the result is
+    // identical to the little-endian case.
+    let samples: [u16; 12] = [
+        32768, 0, 0, // pixel 0
+        65535, 1000, 1000, // pixel 1
+        10000, 64536, 64536, // pixel 2
+        0, 32768, 32767, // pixel 3
+    ];
+    let mut pixels = Vec::new();
+    for s in samples {
+        pixels.extend_from_slice(&s.to_be_bytes());
+    }
+
+    let data = build_raw_tiff(
+        ByteOrder::BigEndian,
+        PhotometricInterpretation::CIELab,
+        16,
+        3,
+        None,
+        &pixels,
+    );
+    let mut decoder = Decoder::open(Cursor::new(&data)).unwrap();
+    decoder.next_image().unwrap();
+
+    assert_eq!(decoder.colortype().unwrap(), ColorType::Lab(16));
+
+    let result = decoder.read_image().unwrap();
+    match result {
+        DecodingSampleBuffer::U16(decoded) => {
+            let expected: [u16; 12] = [
+                32768, 32768, 32768, // pixel 0
+                65535, 33768, 33768, // pixel 1
+                10000, 31768, 31768, // pixel 2
+                0, 0, 65535, // pixel 3
+            ];
+            assert_eq!(decoded, expected);
+        }
+        _ => panic!("Expected U16 buffer"),
+    }
+}
+
+#[test]
+fn test_cielab_rejects_non_uint_sample_format() {
+    // CIELab treats a/b as signed via the photometric interpretation and requires
+    // SampleFormat::Uint (matching the ICCLab arm). A file declaring Int must be
+    // rejected rather than silently producing a signed output buffer.
+    let pixels = vec![0u8; 12]; // 2x2, 3 samples, 8-bit
+    let data = build_raw_tiff(
+        ByteOrder::LittleEndian,
+        PhotometricInterpretation::CIELab,
+        8,
+        3,
+        Some(SampleFormat::Int),
+        &pixels,
+    );
+
+    let mut decoder = Decoder::open(Cursor::new(&data)).unwrap();
+    // Rejection may surface at either next_image() or colortype().
+    let rejected = decoder.next_image().is_err() || decoder.colortype().is_err();
+    assert!(
+        rejected,
+        "CIELab with SampleFormat=Int must be rejected, not decoded"
+    );
 }

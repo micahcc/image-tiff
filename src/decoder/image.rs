@@ -597,18 +597,23 @@ impl Image {
                     ),
                 )),
             },
-            // CIE L*a*b* (TIFF6 Section 23, pp 110-115) encodes a/b as signed int8
-            // (-128..=127) while ICC L*a*b* (photometric=9) uses unsigned samples with
-            // a +128 bias. For 8-bit we re-bias a/b in post-processing (see
-            // `cielab_to_icclab`) so callers see the same encoding as ICCLab.
-            //
-            // Only 8-bit is accepted here. 16-bit CIELab is a valid format that libtiff
-            // does decode (`putcontig8bitCIELab16`, selected by `initCIELabConversion`
-            // in tif_getimage.c line 2216 @ 04884181e8903915038be553bfab404302d98ea0),
-            // but it uses L=uint16 with a/b=int16 — a mixed layout that `SampleFormat`,
-            // which applies uniformly to every sample, cannot express. Left as follow-up.
+            // CIE L*a*b* (TIFF6 Section 23, pp 110-115) encodes a/b as signed integers
+            // (int8 at 8-bit, int16 at 16-bit) with 0 neutral, while ICC L*a*b*
+            // (photometric=9) uses unsigned samples with the neutral at the middle of
+            // the range. `SampleFormat` applies uniformly to all samples, so it can't
+            // describe the L=unsigned + a/b=signed mix; instead we take a/b as signed
+            // from the photometric interpretation (requiring `SampleFormat::Uint`, like
+            // the ICCLab arm) and re-bias them to the unsigned ICCLab encoding in
+            // post-processing (see `cielab_to_icclab`). libtiff does the same, decoding
+            // both depths (`putcontig8bitCIELab8` / `putcontig8bitCIELab16`, selected by
+            // `initCIELabConversion` in tif_getimage.c line 2216
+            // @ 04884181e8903915038be553bfab404302d98ea0).
             PhotometricInterpretation::CIELab => match self.photometric_samples {
-                3 if matches!(self.bits_per_sample, 8) => Ok(ColorType::Lab(self.bits_per_sample)),
+                3 if matches!(self.bits_per_sample, 8 | 16)
+                    && matches!(self.sample_format, SampleFormat::Uint) =>
+                {
+                    Ok(ColorType::Lab(self.bits_per_sample))
+                }
                 _ => Err(TiffError::UnsupportedError(
                     TiffUnsupportedError::InterpretationWithBits(
                         PhotometricInterpretation::CIELab,
