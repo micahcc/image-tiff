@@ -141,14 +141,32 @@ pub struct LZWReader<R: Read> {
 impl<R: Read> LZWReader<R> {
     /// Wraps a reader
     pub fn new(reader: R, compressed_length: usize) -> LZWReader<R> {
-        let configuration =
+        let mut buffered = BufReader::with_capacity(
+            (32 * 1024).min(compressed_length),
+            reader.take(u64::try_from(compressed_length).unwrap()),
+        );
+
+        // `Compression = 5` covers both the current LZW variant and the pre-TIFF-6.0
+        // "old-style" one, with no tag to distinguish them. New-style is MSB-first with
+        // the "early change" code-size switch, and its stream begins with the Clear code
+        // (256) -> first byte 0x80. Old-style is LSB-first *without* the early change
+        // (GIF-style increment timing), and begins with 0x00 followed by a byte with bit
+        // 0 set. This is the heuristic libtiff uses to select its compatibility decoder;
+        // on a short/failed peek we default to the modern variant.
+        let old_style = matches!(
+            buffered.fill_buf(),
+            Ok(head) if head.len() >= 2 && head[0] == 0x00 && head[1] & 0x01 != 0
+        );
+
+        let configuration = if old_style {
+            weezl::decode::Configuration::new(weezl::BitOrder::Lsb, 8)
+        } else {
             weezl::decode::Configuration::with_tiff_size_switch(weezl::BitOrder::Msb, 8)
-                .with_yield_on_full_buffer(true);
+        }
+        .with_yield_on_full_buffer(true);
+
         Self {
-            reader: BufReader::with_capacity(
-                (32 * 1024).min(compressed_length),
-                reader.take(u64::try_from(compressed_length).unwrap()),
-            ),
+            reader: buffered,
             decoder: configuration.build(),
         }
     }

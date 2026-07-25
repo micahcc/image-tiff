@@ -190,7 +190,7 @@ const FILES: &[(&str, Option<u32>)] = &[
     ("tests/libtiffpic/oxford.tif", Some(0x355d2e3e)),
     ("tests/libtiffpic/pc260001.tif", Some(0xdb56b753)),
     ("tests/libtiffpic/quad-jpeg.tif", Some(0xcba22475)),
-    ("tests/libtiffpic/quad-lzw.tif", Some(0)), // invalid LZW stream
+    ("tests/libtiffpic/quad-lzw.tif", Some(0x6055f9ee)), // old-style (LSB) LZW
     ("tests/libtiffpic/quad-tile.tif", Some(0x6055f9ee)),
     ("tests/libtiffpic/README", None),
     ("tests/libtiffpic/smallliz.tif", Some(0)), // unsupported YCbCr chroma subsampling
