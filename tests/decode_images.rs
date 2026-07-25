@@ -1060,6 +1060,16 @@ fn test_gray_u12_hpredict() {
     test_image_sum_u16("hpredict-1c-12b.tiff", ColorType::Gray(12), 11000);
 }
 
+// ---- Old-style LZW ----
+
+#[test]
+fn test_old_style_lzw() {
+    // Pre-TIFF-6.0 "old-style" LZW: LSB-first bit order with no early-change size
+    // switch. Auto-detected from the stream (first byte 0x00, second byte odd).
+    // Same image as libtiffpic's quad-lzw.tif; the decoded pixels must match.
+    test_image_sum_u8("quad-lzw-compat.tiff", ColorType::RGB(8), 21048924);
+}
+
 // ---- TransparencyMask ----
 
 /// Build a minimal uncompressed 2x2 TIFF in memory, in the requested byte order,
