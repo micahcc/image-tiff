@@ -18,6 +18,8 @@ mod cycles;
 mod entry_reader;
 pub mod ifd;
 mod image;
+#[cfg(feature = "lerc")]
+mod lerc;
 mod logluv;
 mod stream;
 mod tag_reader;

@@ -4,6 +4,11 @@ Additions:
 - Added the `TiffHeader` type. It can be used to create a `Decoder` in a state
   before the first IFD and allows opening files at an arbitrary first IFD
   offset rather than one indicated by an encoded header at the start.
+- Added decoding support for the LERC codec (compression tag 34887) behind a
+  new `lerc` feature. Covers the LERC2 bitstream (versions 1-6), including the
+  `LERC_ZSTD` / `LERC_DEFLATE` "additional compression" wrappers GDAL emits.
+  The LERC1 format and the Huffman-coded paths (byte data at maxZError 0.5,
+  lossless float) are not yet implemented.
 
 Changes:
 - The IFD iteration methods on `Decoder` (`next_image`, `seek_to_image`, etc)

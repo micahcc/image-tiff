@@ -43,6 +43,9 @@ default = ["deflate", "fax", "jpeg", "lzw"]
 deflate = ["dep:flate2"]
 fax = ["dep:fax34"]
 jpeg = ["dep:zune-jpeg"]
+# LERC (tag 34887). The blob is often "additionally compressed" with zstd
+# (GDAL's LERC_ZSTD) or deflate (LERC_DEFLATE), so pull those in too.
+lerc = ["zstd", "deflate"]
 lzw = ["dep:weezl"]
 webp = ["dep:image-webp"]
 zstd = ["dep:zstd"]

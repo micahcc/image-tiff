@@ -500,7 +500,7 @@ impl Image {
             color_map,
             decompression_to_host_endian: matches!(
                 compression_method,
-                CompressionMethod::SgiLog | CompressionMethod::SgiLog24
+                CompressionMethod::SgiLog | CompressionMethod::SgiLog24 | CompressionMethod::LERC
             ),
             lenient,
         })
@@ -812,6 +812,10 @@ impl Image {
                 compressed_length,
                 samples,
             )?),
+            #[cfg(feature = "lerc")]
+            CompressionMethod::LERC => {
+                Box::new(super::lerc::LercReader::new(reader, compressed_length)?)
+            }
 
             method => {
                 return Err(TiffError::UnsupportedError(

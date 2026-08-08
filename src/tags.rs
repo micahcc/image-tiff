@@ -155,6 +155,8 @@ pub enum Tag(u16) unknown(
     GeoAsciiParamsTag = 34737, // (SPOT)
     ExifVersion = 0x9000,
     GdalNodata = 42113, // Contains areas with missing data
+    // LERC codec parameters: [version, addCompression] (0=none, 1=deflate, 2=zstd)
+    LercParameters = 50674,
 }
 }
 
@@ -283,6 +285,10 @@ pub enum CompressionMethod(u16) unknown(
 
     // Self-assigned by libtiff
     WebP = 0xC351,
+
+    // Self-assigned by libtiff/Esri. LERC (Limited Error Raster Compression);
+    // the blob may be additionally wrapped in deflate/zstd (see LercParameters).
+    LERC = 34887,
 
     // Self-assigned by libtiff/SGI
     // A packbit like scheme on specific 32-bit samples (16 sint luma, 8 sint u,v). Only really
