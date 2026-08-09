@@ -28,6 +28,8 @@ zstd = { version = "0.13", optional = true }
 zrip-decode = { version = "0.8.2", features = ["paranoid"], optional = true }
 zune-jpeg = { version = "0.5.1", optional = true }
 image-webp = {version = "0.2.4", optional = true }
+lerc-reader = { version = "0.5.0", optional = true, default-features = false }
+lerc-core = { version = "0.5.0", optional = true }
 
 [dev-dependencies]
 criterion = "0.3.1"
@@ -49,6 +51,7 @@ zstd = ["dep:zstd"]
 # Fully safe Rust but somewhat slower Zstd decoding.
 # When both zstd and zstd-safe-rust are enabled, zstd takes precedence.
 zstd-safe-rust = ["dep:zrip-decode"]
+lerc = ["dep:lerc-reader", "dep:lerc-core"]
 
 [[bench]]
 name = "lzw"

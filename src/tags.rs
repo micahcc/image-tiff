@@ -153,6 +153,8 @@ pub enum Tag(u16) unknown(
     GeoKeyDirectoryTag = 34735, // (SPOT)
     GeoDoubleParamsTag = 34736, // (SPOT)
     GeoAsciiParamsTag = 34737, // (SPOT)
+    // LERC compression parameters [version, additional_compression(0=none,1=deflate,2=zstd)]
+    LercParameters = 50674,
     ExifVersion = 0x9000,
     GdalNodata = 42113, // Contains areas with missing data
 }
@@ -283,6 +285,9 @@ pub enum CompressionMethod(u16) unknown(
 
     // Self-assigned by libtiff
     WebP = 0xC351,
+
+    // Registered by Esri/libtiff for LERC compression
+    Lerc = 34887,
 
     // Self-assigned by libtiff/SGI
     // A packbit like scheme on specific 32-bit samples (16 sint luma, 8 sint u,v). Only really

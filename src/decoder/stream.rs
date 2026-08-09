@@ -1,5 +1,5 @@
 //! All IO functionality needed for TIFF decoding
-#[cfg(feature = "webp")]
+#[cfg(any(feature = "webp", feature = "lerc"))]
 use std::io::Cursor;
 use std::io::{self, BufRead, BufReader, Read, Seek, Take};
 
@@ -525,6 +525,81 @@ impl Read for Group3Reader {
         }
 
         self.line_buf.read(buf)
+    }
+}
+
+#[cfg(feature = "lerc")]
+pub struct LercReader {
+    inner: Cursor<Vec<u8>>,
+}
+
+#[cfg(feature = "lerc")]
+impl LercReader {
+    pub fn new<R: Read>(
+        mut reader: R,
+        compressed_length: u64,
+        additional_compression: u16,
+    ) -> crate::TiffResult<Self> {
+        let mut compressed = vec![0u8; compressed_length as usize];
+        reader.read_exact(&mut compressed)?;
+
+        let decompressed = match additional_compression {
+            0 => compressed,
+            #[cfg(feature = "deflate")]
+            1 => {
+                use std::io::Read as _;
+                let mut out = Vec::new();
+                flate2::read::ZlibDecoder::new(&compressed[..]).read_to_end(&mut out)?;
+                out
+            }
+            #[cfg(feature = "zstd")]
+            2 => zstd::decode_all(&compressed[..])
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            #[cfg(all(not(feature = "zstd"), feature = "zstd-safe-rust"))]
+            2 => {
+                use std::io::Read as _;
+                let mut out = Vec::new();
+                zrip_decode::streaming::FrameDecoder::new(&compressed[..])
+                    .read_to_end(&mut out)?;
+                out
+            }
+            _ => {
+                return Err(crate::TiffError::UnsupportedError(
+                    crate::TiffUnsupportedError::UnsupportedCompressionMethod(
+                        crate::tags::CompressionMethod::Lerc,
+                    ),
+                ));
+            }
+        };
+
+        let decoded = lerc_reader::decode(&decompressed)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let bytes = pixel_data_to_bytes(decoded.pixels);
+        Ok(Self {
+            inner: Cursor::new(bytes),
+        })
+    }
+}
+
+#[cfg(feature = "lerc")]
+fn pixel_data_to_bytes(data: lerc_core::PixelData) -> Vec<u8> {
+    match data {
+        lerc_core::PixelData::U8(v) => v,
+        lerc_core::PixelData::I8(v) => v.into_iter().map(|x| x as u8).collect(),
+        lerc_core::PixelData::U16(v) => v.iter().flat_map(|x| x.to_ne_bytes()).collect(),
+        lerc_core::PixelData::I16(v) => v.iter().flat_map(|x| x.to_ne_bytes()).collect(),
+        lerc_core::PixelData::U32(v) => v.iter().flat_map(|x| x.to_ne_bytes()).collect(),
+        lerc_core::PixelData::I32(v) => v.iter().flat_map(|x| x.to_ne_bytes()).collect(),
+        lerc_core::PixelData::F32(v) => v.iter().flat_map(|x| x.to_ne_bytes()).collect(),
+        lerc_core::PixelData::F64(v) => v.iter().flat_map(|x| x.to_ne_bytes()).collect(),
+    }
+}
+
+#[cfg(feature = "lerc")]
+impl Read for LercReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf)
     }
 }
 

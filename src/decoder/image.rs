@@ -78,6 +78,7 @@ pub(crate) struct Image {
     pub compression_method: CompressionMethod,
     pub predictor: Predictor,
     pub jpeg_tables: Option<Arc<Vec<u8>>>,
+    pub lerc_additional_compression: u16,
     pub chunk_type: ChunkType,
     pub planar_config: PlanarConfiguration,
     pub strip_decoder: Option<StripDecodeState>,
@@ -201,6 +202,22 @@ impl Image {
             Some(Arc::new(vec))
         } else {
             None
+        };
+
+        let lerc_additional_compression = if compression_method == CompressionMethod::Lerc {
+            match tag_reader.find_tag(Tag::LercParameters)? {
+                Some(val) => {
+                    let params = val.into_u32_vec()?;
+                    if params.len() >= 2 {
+                        params[1] as u16
+                    } else {
+                        0
+                    }
+                }
+                None => 0,
+            }
+        } else {
+            0
         };
 
         let samples: u16 = tag_reader
@@ -488,6 +505,7 @@ impl Image {
             photometric_interpretation,
             compression_method,
             jpeg_tables,
+            lerc_additional_compression,
             predictor,
             chunk_type,
             planar_config,
@@ -500,7 +518,7 @@ impl Image {
             color_map,
             decompression_to_host_endian: matches!(
                 compression_method,
-                CompressionMethod::SgiLog | CompressionMethod::SgiLog24
+                CompressionMethod::SgiLog | CompressionMethod::SgiLog24 | CompressionMethod::Lerc
             ),
             lenient,
         })
@@ -698,6 +716,7 @@ impl Image {
         dimensions: (u32, u32),
         samples: u16,
         #[cfg_attr(not(feature = "fax"), allow(unused_variables))] fill_order: u16,
+        #[cfg_attr(not(feature = "lerc"), allow(unused_variables))] lerc_additional_compression: u16,
     ) -> TiffResult<Box<dyn Read + 'r>> {
         Ok(match compression_method {
             CompressionMethod::None => Box::new(reader),
@@ -811,6 +830,12 @@ impl Image {
                 reader,
                 compressed_length,
                 samples,
+            )?),
+            #[cfg(feature = "lerc")]
+            CompressionMethod::Lerc => Box::new(super::stream::LercReader::new(
+                reader,
+                compressed_length,
+                lerc_additional_compression,
             )?),
 
             method => {
@@ -1179,6 +1204,7 @@ impl Image {
             chunk_dims,
             self.samples,
             self.fill_order,
+            self.lerc_additional_compression,
         )?;
 
         // Extended bit depths (9-15, 17-31): packed N-bit samples must be unpacked to
