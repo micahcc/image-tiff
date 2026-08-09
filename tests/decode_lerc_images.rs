@@ -17,6 +17,15 @@ const HH: usize = HEIGHT / 2; // 23
 /// - Top-right (37x23): vertical ramp, pixel[y][x] = (y * 255) / 22
 /// - Bottom-left (36x24): 4x4 checkerboard (255 or 0)
 /// - Bottom-right (37x24): constant 200
+///
+/// Test images generated with:
+///   # write 73x47 raw u8 image with the pattern from expected_u8_pixel() below
+///   # then create an ENVI .hdr alongside it (data type = 1, bsq)
+///   gdal_translate -of GTiff -co COMPRESS=LERC -co MAX_Z_ERROR=0 pattern.dat lerc-u8-73x47.tiff
+///   gdal_translate -of GTiff -co COMPRESS=LERC_DEFLATE -co MAX_Z_ERROR=0 pattern.dat lerc-deflate-u8-73x47.tiff
+///   # same but with data type = 4 (float32) in the .hdr
+///   gdal_translate -of GTiff -co COMPRESS=LERC -co MAX_Z_ERROR=0 pattern_f32.dat lerc-f32-73x47.tiff
+///   gdal_translate -of GTiff -co COMPRESS=LERC -co MAX_Z_ERROR=0.1 pattern_f32.dat lerc-f32-lossy-73x47.tiff
 fn expected_u8_pixel(x: usize, y: usize) -> u8 {
     if y < HH && x < HW {
         ((x * 255) / (HW - 1)) as u8
@@ -100,6 +109,33 @@ fn test_lerc_f32() {
             assert_eq!(
                 got, expected,
                 "mismatch at ({x}, {y}): got {got}, expected {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_lerc_f32_lossy() {
+    let path = PathBuf::from(TEST_IMAGE_DIR).join("lerc-f32-lossy-73x47.tiff");
+    let file = File::open(&path).unwrap();
+    let mut decoder = Decoder::new(file).unwrap();
+
+    assert_eq!(decoder.dimensions().unwrap(), (WIDTH as u32, HEIGHT as u32));
+    assert_eq!(decoder.colortype().unwrap(), ColorType::Gray(32));
+
+    let data = match decoder.read_image().unwrap() {
+        DecodingSampleBuffer::F32(d) => d,
+        _ => panic!("expected F32"),
+    };
+    assert_eq!(data.len(), WIDTH * HEIGHT);
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let got = data[y * WIDTH + x];
+            let expected = expected_u8_pixel(x, y) as f32;
+            assert!(
+                (got - expected).abs() <= 0.1,
+                "at ({x}, {y}): got {got}, expected {expected}, diff {}",
+                (got - expected).abs()
             );
         }
     }
