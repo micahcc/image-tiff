@@ -32,7 +32,7 @@ fn expected_u8_pixel(x: usize, y: usize) -> u8 {
     } else if y < HH && x >= HW {
         ((y * 255) / (HH - 1)) as u8
     } else if y >= HH && x < HW {
-        if ((x / 4) + (y / 4)) % 2 == 0 {
+        if ((x / 4) + (y / 4)).is_multiple_of(2) {
             255
         } else {
             0
@@ -56,11 +56,17 @@ fn verify_u8_pattern(data: &[u8]) {
     }
 }
 
+fn open_test_image(name: &str) -> Decoder<File> {
+    let path = PathBuf::from(TEST_IMAGE_DIR).join(name);
+    let file = File::open(&path).unwrap();
+    let mut decoder = Decoder::open(file).unwrap();
+    decoder.next_image().unwrap();
+    decoder
+}
+
 #[test]
 fn test_lerc_u8() {
-    let path = PathBuf::from(TEST_IMAGE_DIR).join("lerc-u8-73x47.tiff");
-    let file = File::open(&path).unwrap();
-    let mut decoder = Decoder::new(file).unwrap();
+    let mut decoder = open_test_image("lerc-u8-73x47.tiff");
 
     assert_eq!(decoder.dimensions().unwrap(), (WIDTH as u32, HEIGHT as u32));
     assert_eq!(decoder.colortype().unwrap(), ColorType::Gray(8));
@@ -74,9 +80,7 @@ fn test_lerc_u8() {
 
 #[test]
 fn test_lerc_deflate_u8() {
-    let path = PathBuf::from(TEST_IMAGE_DIR).join("lerc-deflate-u8-73x47.tiff");
-    let file = File::open(&path).unwrap();
-    let mut decoder = Decoder::new(file).unwrap();
+    let mut decoder = open_test_image("lerc-deflate-u8-73x47.tiff");
 
     assert_eq!(decoder.dimensions().unwrap(), (WIDTH as u32, HEIGHT as u32));
     assert_eq!(decoder.colortype().unwrap(), ColorType::Gray(8));
@@ -90,9 +94,7 @@ fn test_lerc_deflate_u8() {
 
 #[test]
 fn test_lerc_f32() {
-    let path = PathBuf::from(TEST_IMAGE_DIR).join("lerc-f32-73x47.tiff");
-    let file = File::open(&path).unwrap();
-    let mut decoder = Decoder::new(file).unwrap();
+    let mut decoder = open_test_image("lerc-f32-73x47.tiff");
 
     assert_eq!(decoder.dimensions().unwrap(), (WIDTH as u32, HEIGHT as u32));
     assert_eq!(decoder.colortype().unwrap(), ColorType::Gray(32));
@@ -116,9 +118,7 @@ fn test_lerc_f32() {
 
 #[test]
 fn test_lerc_f32_lossy() {
-    let path = PathBuf::from(TEST_IMAGE_DIR).join("lerc-f32-lossy-73x47.tiff");
-    let file = File::open(&path).unwrap();
-    let mut decoder = Decoder::new(file).unwrap();
+    let mut decoder = open_test_image("lerc-f32-lossy-73x47.tiff");
 
     assert_eq!(decoder.dimensions().unwrap(), (WIDTH as u32, HEIGHT as u32));
     assert_eq!(decoder.colortype().unwrap(), ColorType::Gray(32));
