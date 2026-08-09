@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        feature: ["", deflate, jpeg, lzw, zstd, default, "default,zstd"]
+        feature: ["", deflate, jpeg, lzw, zstd, lerc, default, "default,zstd"]
     steps:
     - uses: actions/checkout@v6
     - uses: dtolnay/rust-toolchain@stable
