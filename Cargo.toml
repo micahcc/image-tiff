@@ -67,6 +67,10 @@ harness = false
 
 
 [[test]]
+name = "decode_lerc_images"
+required-features = ["lerc", "deflate"]
+
+[[test]]
 name = "decode_libtiffpic"
 path = "tests/decode_libtiffpic.rs"
 harness = false
