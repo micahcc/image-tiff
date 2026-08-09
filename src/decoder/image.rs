@@ -716,7 +716,8 @@ impl Image {
         dimensions: (u32, u32),
         samples: u16,
         #[cfg_attr(not(feature = "fax"), allow(unused_variables))] fill_order: u16,
-        #[cfg_attr(not(feature = "lerc"), allow(unused_variables))] lerc_additional_compression: u16,
+        #[cfg_attr(not(feature = "lerc"), allow(unused_variables))]
+        lerc_additional_compression: u16,
     ) -> TiffResult<Box<dyn Read + 'r>> {
         Ok(match compression_method {
             CompressionMethod::None => Box::new(reader),

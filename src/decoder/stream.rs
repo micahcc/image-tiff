@@ -559,8 +559,7 @@ impl LercReader {
             2 => {
                 use std::io::Read as _;
                 let mut out = Vec::new();
-                zrip_decode::streaming::FrameDecoder::new(&compressed[..])
-                    .read_to_end(&mut out)?;
+                zrip_decode::streaming::FrameDecoder::new(&compressed[..]).read_to_end(&mut out)?;
                 out
             }
             _ => {

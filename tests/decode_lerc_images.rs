@@ -9,21 +9,25 @@ use std::path::PathBuf;
 const TEST_IMAGE_DIR: &str = "./tests/images/";
 const WIDTH: usize = 73;
 const HEIGHT: usize = 47;
-const HW: usize = WIDTH / 2;  // 36
+const HW: usize = WIDTH / 2; // 36
 const HH: usize = HEIGHT / 2; // 23
 
-/// The test images are 73x47 with a known pattern:
-/// - Top-left: horizontal ramp, pixel[y][x] = (x * 255) / (HW - 1)
-/// - Top-right: vertical ramp, pixel[y][x] = (y * 255) / (HH - 1)
-/// - Bottom-left: 4x4 checkerboard (255 or 0)
-/// - Bottom-right: constant 200
+/// 73x47 image split into quadrants:
+/// - Top-left (36x23): horizontal ramp, pixel[y][x] = (x * 255) / 35
+/// - Top-right (37x23): vertical ramp, pixel[y][x] = (y * 255) / 22
+/// - Bottom-left (36x24): 4x4 checkerboard (255 or 0)
+/// - Bottom-right (37x24): constant 200
 fn expected_u8_pixel(x: usize, y: usize) -> u8 {
     if y < HH && x < HW {
         ((x * 255) / (HW - 1)) as u8
     } else if y < HH && x >= HW {
         ((y * 255) / (HH - 1)) as u8
     } else if y >= HH && x < HW {
-        if ((x / 4) + (y / 4)) % 2 == 0 { 255 } else { 0 }
+        if ((x / 4) + (y / 4)) % 2 == 0 {
+            255
+        } else {
+            0
+        }
     } else {
         200
     }
