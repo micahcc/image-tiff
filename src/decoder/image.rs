@@ -1214,7 +1214,7 @@ impl Image {
                 reader.read_exact(&mut packed)?;
 
                 let out_row = &mut row[..data_row_bytes];
-                unpack_bits(&packed, out_row, tiff_bps, samples_per_data_row, out_bps);
+                unpack_bits(&packed, out_row, tiff_bps, samples_per_data_row, out_bps)?;
 
                 // Unpacked values are in native byte order, so pass native to skip
                 // endianness conversion while still applying the predictor.
@@ -1434,6 +1434,14 @@ impl Image {
 /// `num_samples` is the number of samples to extract.
 /// `output_width` is the output sample width in bits (16 or 32).
 ///
+/// # Errors
+///
+/// `bits_per_sample` comes from the file, so a malformed one is reported
+/// rather than guessed at. Likewise a `src` too short to hold
+/// `num_samples` samples at that depth: that is a truncated or
+/// inconsistent chunk, and reading past it would otherwise panic inside
+/// the extraction loop.
+///
 /// # Panics
 ///
 /// Panics if `dst` is too small for `num_samples` output samples.
@@ -1443,27 +1451,66 @@ fn unpack_bits(
     bits_per_sample: u8,
     num_samples: usize,
     output_width: u8,
-) {
+) -> TiffResult<()> {
     // Dispatch to const-generic specializations so the compiler can unroll the
     // byte-gathering loop and precompute shift/mask constants.
+    // Enough packed bits to satisfy the request? Checked once per call
+    // rather than per sample, which also makes every read inside the loop
+    // provably in bounds -- `extract_bits_msb_const` computes
+    // `src.len() - byte_idx` and would otherwise underflow and panic on a
+    // short chunk.
+    //
+    // Called from inside the dispatch so the depth is validated first: an
+    // unsupported depth is the more specific diagnosis, and its implied
+    // size is meaningless anyway.
+    let enough_bits = |bps: u8| -> TiffResult<()> {
+        let needed = num_samples
+            .checked_mul(bps as usize)
+            .ok_or(TiffError::FormatError(
+                TiffFormatError::InconsistentSizesEncountered,
+            ))?;
+        if src.len().saturating_mul(8) < needed {
+            return Err(TiffError::FormatError(
+                TiffFormatError::InconsistentSizesEncountered,
+            ));
+        }
+        Ok(())
+    };
+
     macro_rules! dispatch {
         ($($bps:literal),+) => {
             match bits_per_sample {
-                $( $bps => unpack_bits_const::<$bps>(src, dst, num_samples, output_width), )+
-                _ => unpack_bits_const::<0>(src, dst, num_samples, output_width),
+                $( $bps => {
+                    enough_bits($bps)?;
+                    unpack_bits_const::<$bps>(src, dst, num_samples, output_width)
+                } )+
+                // Not a depth this path unpacks. `bits_per_sample` is read
+                // from the file, so this is reachable on a malformed one and
+                // is reported upward. It used to fall through to a BPS=0
+                // specialization that decoded as though the depth were the
+                // output width, which turned a bad file into plausible
+                // garbage pixels with no indication anything was wrong.
+                other => return Err(TiffError::UnsupportedError(
+                    TiffUnsupportedError::UnsupportedBitsPerChannel(other),
+                )),
             }
         };
     }
-    // Cover every bit depth from 2..=32 that could reach this path, plus 0 as fallback.
+
+    // Cover every bit depth from 2..=32 that could reach this path.
     // 1 is absent because bilevel is never unpacked; 8, 16 and 32 need no unpacking.
     dispatch!(
         2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
         27, 28, 29, 30, 31, 32
     );
+    Ok(())
 }
 
 /// Inner loop with const BPS so the compiler can optimize the bit extraction.
-/// BPS=0 is the fallback for unexpected bit depths (uses runtime value).
+///
+/// Only instantiated for depths `unpack_bits` dispatches, which rejects
+/// anything else before getting here -- so there is no runtime bit-depth
+/// branch left in the loop.
 #[inline(always)]
 fn unpack_bits_const<const BPS: u8>(
     src: &[u8],
@@ -1478,39 +1525,27 @@ fn unpack_bits_const<const BPS: u8>(
             debug_assert!(dst.len() >= num_samples);
             let mut bit_offset: usize = 0;
             for i in 0..num_samples {
-                let val = if BPS > 0 {
-                    extract_bits_msb_const::<BPS>(src, bit_offset)
-                } else {
-                    extract_bits_msb_const::<8>(src, bit_offset) // unreachable fallback
-                };
+                let val = extract_bits_msb_const::<BPS>(src, bit_offset);
                 dst[i] = val as u8;
-                bit_offset += if BPS > 0 { BPS as usize } else { 8 };
+                bit_offset += BPS as usize;
             }
         }
         16 => {
             debug_assert!(dst.len() >= num_samples * 2);
             let mut bit_offset: usize = 0;
             for i in 0..num_samples {
-                let val = if BPS > 0 {
-                    extract_bits_msb_const::<BPS>(src, bit_offset)
-                } else {
-                    extract_bits_msb_const::<16>(src, bit_offset) // unreachable fallback
-                };
+                let val = extract_bits_msb_const::<BPS>(src, bit_offset);
                 dst[i * 2..i * 2 + 2].copy_from_slice(&(val as u16).to_ne_bytes());
-                bit_offset += if BPS > 0 { BPS as usize } else { 16 };
+                bit_offset += BPS as usize;
             }
         }
         32 => {
             debug_assert!(dst.len() >= num_samples * 4);
             let mut bit_offset: usize = 0;
             for i in 0..num_samples {
-                let val = if BPS > 0 {
-                    extract_bits_msb_const::<BPS>(src, bit_offset)
-                } else {
-                    extract_bits_msb_const::<32>(src, bit_offset) // unreachable fallback
-                };
+                let val = extract_bits_msb_const::<BPS>(src, bit_offset);
                 dst[i * 4..i * 4 + 4].copy_from_slice(&val.to_ne_bytes());
-                bit_offset += if BPS > 0 { BPS as usize } else { 32 };
+                bit_offset += BPS as usize;
             }
         }
         _ => unreachable!(),
@@ -1659,5 +1694,71 @@ impl PlaneLayout {
         );
 
         Ok(used_plane_offsets as u16)
+    }
+}
+#[cfg(test)]
+mod unpack_tests {
+    use super::unpack_bits;
+    use crate::{TiffError, TiffFormatError, TiffUnsupportedError};
+
+    #[test]
+    fn unpacks_a_supported_depth() {
+        // Four 4-bit samples MSB-first: 0x1, 0x2, 0xA, 0xF.
+        let src = [0x12u8, 0xAF];
+        let mut dst = [0u8; 4];
+        unpack_bits(&src, &mut dst, 4, 4, 8).unwrap();
+        assert_eq!(dst, [0x1, 0x2, 0xA, 0xF]);
+    }
+
+    #[test]
+    fn an_unsupported_depth_is_reported_not_guessed() {
+        // bits_per_sample comes from the file. This used to fall through to
+        // a BPS=0 specialization that decoded as though the depth were the
+        // output width, so a malformed file produced plausible garbage with
+        // nothing to indicate it.
+        for bad in [0u8, 1, 33, 64, 255] {
+            let src = [0xFFu8; 16];
+            let mut dst = [0u8; 8];
+            let error = unpack_bits(&src, &mut dst, bad, 8, 8)
+                .expect_err(&format!("{bad} bits should be rejected"));
+            match error {
+                TiffError::UnsupportedError(TiffUnsupportedError::UnsupportedBitsPerChannel(
+                    got,
+                )) => assert_eq!(got, bad),
+                other => panic!("{bad} bits gave the wrong error: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_chunk_is_reported_not_read_past() {
+        // Ten 12-bit samples need 120 bits; give it 2 bytes. Without the
+        // check, extract_bits_msb_const computes `src.len() - byte_idx` and
+        // underflows, panicking mid-decode instead of reporting the file.
+        let src = [0xAAu8, 0xBB];
+        let mut dst = [0u8; 20];
+        let error =
+            unpack_bits(&src, &mut dst, 12, 10, 16).expect_err("a short chunk should be rejected");
+        assert!(
+            matches!(
+                error,
+                TiffError::FormatError(TiffFormatError::InconsistentSizesEncountered)
+            ),
+            "wrong error for a short chunk: {error:?}"
+        );
+    }
+
+    #[test]
+    fn exactly_enough_bits_is_accepted() {
+        // The boundary: 16 samples of 4 bits is exactly 8 bytes, and the
+        // final sample's wide read runs off the end of the buffer, which is
+        // the case the extraction's short-read path exists for.
+        let src = [0x01u8, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF];
+        let mut dst = [0u8; 16];
+        unpack_bits(&src, &mut dst, 4, 16, 8).unwrap();
+        assert_eq!(
+            dst,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xA, 0xB, 0xC, 0xD, 0xE, 0xF]
+        );
     }
 }
