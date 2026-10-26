@@ -393,6 +393,43 @@ fn test_gray_u4_unpacked_matches_manual_expansion() {
     }
 }
 
+/// Bilevel is the commonest sub-byte depth, so the opt-in has to expand it rather than refuse
+/// it. The default is unchanged and still returns the packed rows, which `test_palette_u1`
+/// pins by summing them.
+#[test]
+fn test_bilevel_unpacked_on_request() {
+    let path = PathBuf::from(TEST_IMAGE_DIR).join("palette-1c-1b.tiff");
+
+    let mut packed_decoder = Decoder::open(File::open(&path).expect("Cannot find test image!"))
+        .expect("Cannot create decoder");
+    packed_decoder.next_image().unwrap();
+    let (width, height) = packed_decoder.dimensions().unwrap();
+    let DecodingSampleBuffer::U8(packed) = packed_decoder.read_image().unwrap() else {
+        panic!("Wrong bit depth")
+    };
+
+    let mut decoder = Decoder::open(File::open(&path).unwrap())
+        .unwrap()
+        .with_unpacked_subbyte(true);
+    decoder.next_image().unwrap();
+    let DecodingSampleBuffer::U8(unpacked) = decoder.read_image().unwrap() else {
+        panic!("Wrong bit depth")
+    };
+
+    assert_eq!(unpacked.len(), width as usize * height as usize);
+    let packed_row_bytes = (width as usize).div_ceil(8);
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let bit = packed[y * packed_row_bytes + x / 8] >> (7 - (x % 8)) & 1;
+            assert_eq!(
+                unpacked[y * width as usize + x],
+                bit,
+                "mismatch at ({x}, {y})"
+            );
+        }
+    }
+}
+
 #[test]
 fn test_gray_u12() {
     test_image_sum_u16("12bit.cropped.tiff", ColorType::Gray(12), 10973);

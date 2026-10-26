@@ -910,8 +910,10 @@ impl Image {
 
         // Output bits per sample: supra-byte non-standard depths are promoted to the next
         // standard width (matching sample_type() mapping). Sub-byte depths stay packed unless the
-        // caller asked for them expanded -- returning a byte per pixel for a 1-bit fax raster
-        // would multiply the buffer eightfold and break every caller that unpacks bits itself.
+        // caller asked for them expanded -- returning a byte per pixel for a 1-bit fax raster by
+        // default would multiply the buffer eightfold and break every caller that unpacks bits
+        // itself. Bilevel is included once asked: refusing the commonest sub-byte depth is not a
+        // useful reading of the request.
         let output_bits_per_sample: u8 = match tiff_bits_per_sample {
             0..=8 if !self.unpack_subbyte => tiff_bits_per_sample,
             0..=8 => 8,
@@ -1497,10 +1499,11 @@ fn unpack_bits(
         };
     }
 
-    // Cover every bit depth from 2..=32 that could reach this path.
-    // 1 is absent because bilevel is never unpacked; 8, 16 and 32 need no unpacking.
+    // Every depth that can reach this path: 1..=32, less 8, which is already a whole sample.
+    // 16 and 32 are listed because a declared 9..=15 or 17..=31 promotes to them, and 8 is not
+    // because nothing promotes to it except the sub-byte opt-in, which 1..=7 covers.
     dispatch!(
-        2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+        1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
         27, 28, 29, 30, 31, 32
     );
     Ok(())
@@ -1716,7 +1719,10 @@ mod unpack_tests {
         // a BPS=0 specialization that decoded as though the depth were the
         // output width, so a malformed file produced plausible garbage with
         // nothing to indicate it.
-        for bad in [0u8, 1, 33, 64, 255] {
+        //
+        // 1 is absent from the list because bilevel is unpacked on request;
+        // unpacks_bilevel below covers it.
+        for bad in [0u8, 33, 64, 255] {
             let src = [0xFFu8; 16];
             let mut dst = [0u8; 8];
             let error = unpack_bits(&src, &mut dst, bad, 8, 8)
@@ -1728,6 +1734,16 @@ mod unpack_tests {
                 other => panic!("{bad} bits gave the wrong error: {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn unpacks_bilevel() {
+        // 1 bit is the commonest sub-byte depth, so the opt-in that reaches here has to expand
+        // it rather than report it. MSB-first: 0b1010_0110.
+        let src = [0b1010_0110u8];
+        let mut dst = [0u8; 8];
+        unpack_bits(&src, &mut dst, 1, 8, 8).unwrap();
+        assert_eq!(dst, [1, 0, 1, 0, 0, 1, 1, 0]);
     }
 
     #[test]
