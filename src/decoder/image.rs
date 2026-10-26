@@ -1523,6 +1523,13 @@ fn unpack_bits_const<const BPS: u8>(
 ) {
     debug_assert!(output_width == 8 || output_width == 16 || output_width == 32);
 
+    const {
+        assert!(
+            BPS > 0 && BPS <= 32,
+            "dispatch only instantiates decodable depths"
+        )
+    };
+
     match output_width {
         8 => {
             debug_assert!(dst.len() >= num_samples);
@@ -1551,7 +1558,7 @@ fn unpack_bits_const<const BPS: u8>(
                 bit_offset += BPS as usize;
             }
         }
-        _ => unreachable!(),
+        other => unreachable!("output width {other} is not a promoted sample width"),
     }
 }
 
