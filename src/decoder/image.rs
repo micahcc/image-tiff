@@ -98,6 +98,9 @@ pub(crate) struct Image {
     /// they have interior byte order treatment.
     pub decompression_to_host_endian: bool,
     pub lenient: bool,
+    /// Expand sub-byte samples to one byte each instead of returning them packed. Opt-in: the
+    /// packed form is what every existing caller of a bilevel or 4-bit raster expects.
+    pub unpack_subbyte: bool,
 }
 
 /// Describes how to read a tile-aligned portion of the image.
@@ -160,6 +163,7 @@ impl Image {
         decoder: &mut ValueReader<R>,
         ifd: &Directory,
         lenient: bool,
+        unpack_subbyte: bool,
     ) -> TiffResult<Image> {
         let mut tag_reader = TagReader { decoder, ifd };
 
@@ -503,6 +507,7 @@ impl Image {
                 CompressionMethod::SgiLog | CompressionMethod::SgiLog24
             ),
             lenient,
+            unpack_subbyte,
         })
     }
 
@@ -903,10 +908,13 @@ impl Image {
 
         let data_dimensions = (width, height);
 
-        // Output bits per sample: sub-byte depths stay packed, supra-byte non-standard
-        // depths are promoted to the next standard width (matching sample_type() mapping).
+        // Output bits per sample: supra-byte non-standard depths are promoted to the next
+        // standard width (matching sample_type() mapping). Sub-byte depths stay packed unless the
+        // caller asked for them expanded -- returning a byte per pixel for a 1-bit fax raster
+        // would multiply the buffer eightfold and break every caller that unpacks bits itself.
         let output_bits_per_sample: u8 = match tiff_bits_per_sample {
-            0..=8 => tiff_bits_per_sample,
+            0..=8 if !self.unpack_subbyte => tiff_bits_per_sample,
+            0..=8 => 8,
             9..=16 => 16,
             17..=32 => 32,
             _ => 64,
@@ -1181,10 +1189,9 @@ impl Image {
             self.fill_order,
         )?;
 
-        // Extended bit depths (9-15, 17-31): packed N-bit samples must be unpacked to
+        // Non-standard bit depths (2-7, 9-15, 17-31): packed N-bit samples must be unpacked to
         // standard-width output samples before endianness fix and predictor.
-        let needs_unpacking = layout.tiff_bits_per_sample != layout.output_bits_per_sample
-            && layout.tiff_bits_per_sample > 8;
+        let needs_unpacking = layout.tiff_bits_per_sample != layout.output_bits_per_sample;
 
         if needs_unpacking {
             if !is_all_bits {
@@ -1447,10 +1454,11 @@ fn unpack_bits(
             }
         };
     }
-    // Cover every bit depth from 9..=32 that could reach this path, plus 0 as fallback.
+    // Cover every bit depth from 2..=32 that could reach this path, plus 0 as fallback.
+    // 1 is absent because bilevel is never unpacked; 8, 16 and 32 need no unpacking.
     dispatch!(
-        9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
-        32
+        2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+        27, 28, 29, 30, 31, 32
     );
 }
 
@@ -1463,9 +1471,22 @@ fn unpack_bits_const<const BPS: u8>(
     num_samples: usize,
     output_width: u8,
 ) {
-    debug_assert!(output_width == 16 || output_width == 32);
+    debug_assert!(output_width == 8 || output_width == 16 || output_width == 32);
 
     match output_width {
+        8 => {
+            debug_assert!(dst.len() >= num_samples);
+            let mut bit_offset: usize = 0;
+            for i in 0..num_samples {
+                let val = if BPS > 0 {
+                    extract_bits_msb_const::<BPS>(src, bit_offset)
+                } else {
+                    extract_bits_msb_const::<8>(src, bit_offset) // unreachable fallback
+                };
+                dst[i] = val as u8;
+                bit_offset += if BPS > 0 { BPS as usize } else { 8 };
+            }
+        }
         16 => {
             debug_assert!(dst.len() >= num_samples * 2);
             let mut bit_offset: usize = 0;
