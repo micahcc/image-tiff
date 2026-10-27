@@ -1429,24 +1429,6 @@ impl Image {
     }
 }
 
-/// Unpack N-bit packed samples (MSB-first) into standard-width output samples in native byte
-/// order. Packed bits are read from `src` and expanded samples are written to `dst`.
-///
-/// `bits_per_sample` is the packed depth (e.g. 10, 12, 14).
-/// `num_samples` is the number of samples to extract.
-/// `output_width` is the output sample width in bits (16 or 32).
-///
-/// # Errors
-///
-/// `bits_per_sample` comes from the file, so a malformed one is reported
-/// rather than guessed at. Likewise a `src` too short to hold
-/// `num_samples` samples at that depth: that is a truncated or
-/// inconsistent chunk, and reading past it would otherwise panic inside
-/// the extraction loop.
-///
-/// # Panics
-///
-/// Panics if `dst` is too small for `num_samples` output samples.
 /// Does `src` hold enough packed bits for `num_samples` samples of `bits_per_sample`?
 ///
 /// Checked once per call rather than per sample, which also makes every read inside the
@@ -1462,6 +1444,25 @@ fn enough_bits(src: &[u8], num_samples: usize, bits_per_sample: u8) -> TiffResul
         )),
     }
 }
+
+/// Unpack N-bit packed samples (MSB-first) into standard-width output samples in native byte
+/// order. Packed bits are read from `src` and expanded samples are written to `dst`.
+///
+/// `bits_per_sample` is the packed depth (e.g. 10, 12, 14).
+/// `num_samples` is the number of samples to extract.
+/// `output_width` is the output sample width in bits (8, 16 or 32).
+///
+/// # Errors
+///
+/// `bits_per_sample` comes from the file, so a malformed one is reported
+/// rather than guessed at. Likewise a `src` too short to hold
+/// `num_samples` samples at that depth: that is a truncated or
+/// inconsistent chunk, and reading past it would otherwise panic inside
+/// the extraction loop.
+///
+/// # Panics
+///
+/// Panics if `dst` is too small for `num_samples` output samples.
 
 fn unpack_bits(
     src: &[u8],
