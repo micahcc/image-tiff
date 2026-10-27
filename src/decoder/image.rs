@@ -1513,8 +1513,7 @@ fn unpack_bits(
 /// Inner loop with const BPS so the compiler can optimize the bit extraction.
 ///
 /// Only instantiated for depths `unpack_bits` dispatches, which rejects
-/// anything else before getting here -- so there is no runtime bit-depth
-/// branch left in the loop.
+/// anything else before getting here -- so no need to runtime check bit-depth
 #[inline(always)]
 fn unpack_bits_const<const BPS: u8>(
     src: &[u8],
