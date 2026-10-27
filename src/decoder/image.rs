@@ -1429,6 +1429,19 @@ impl Image {
     }
 }
 
+/// Can a `bits_per_sample`-wide sample be delivered in an `output_width`-wide lane?
+///
+/// Widening is fine: a 2-bit sample in a `u16` lane is just a small value. Narrowing is not --
+/// a 9-bit sample does not fit a byte, and truncating it would hand back wrong pixels.
+fn fits_output_width(bits_per_sample: u8, output_width: u8) -> TiffResult<()> {
+    if bits_per_sample > output_width {
+        return Err(TiffError::UnsupportedError(
+            TiffUnsupportedError::UnsupportedBitsPerChannel(bits_per_sample),
+        ));
+    }
+    Ok(())
+}
+
 /// Does `src` hold enough packed bits for `num_samples` samples of `bits_per_sample`?
 ///
 /// Checked once per call rather than per sample, which also makes every read inside the
@@ -1477,6 +1490,7 @@ fn unpack_bits(
         ($($bps:literal),+) => {
             match bits_per_sample {
                 $( $bps => {
+                    fits_output_width($bps, output_width)?;
                     enough_bits(src, num_samples, $bps)?;
                     unpack_bits_const::<$bps>(src, dst, num_samples, output_width)
                 } )+
@@ -1490,12 +1504,13 @@ fn unpack_bits(
         };
     }
 
-    // Every depth that can reach this path: 1..=32, less 8, which is already a whole sample.
-    // 16 and 32 are listed because a declared 9..=15 or 17..=31 promotes to them, and 8 is not
-    // because nothing promotes to it except the sub-byte opt-in, which 1..=7 covers.
+    // The decoder reaches this with 1..=7 (the sub-byte opt-in), 9..=15 and 17..=31: a depth
+    // equal to its own output width needs no unpacking, so 8, 16 and 32 never arrive from there.
+    // All three are still listed, because a caller may widen deliberately -- 16-bit samples into
+    // 32-bit lanes -- and `fits_output_width` is what decides whether that pairing is allowed.
     dispatch!(
-        1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-        27, 28, 29, 30, 31, 32
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+        26, 27, 28, 29, 30, 31, 32
     );
     Ok(())
 }
@@ -1742,6 +1757,36 @@ mod unpack_tests {
         let mut dst = [0u8; 8];
         unpack_bits(&src, &mut dst, 1, 8, 8).unwrap();
         assert_eq!(dst, [1, 0, 1, 0, 0, 1, 1, 0]);
+    }
+
+    #[test]
+    fn widening_into_a_larger_lane_is_allowed() {
+        // 2 bits in a u16 lane is just a small value, so the pairing is fine. MSB-first:
+        // 0b00_01_10_11.
+        let src = [0b00_01_10_11u8];
+        let mut dst = [0u8; 8];
+        unpack_bits(&src, &mut dst, 2, 4, 16).unwrap();
+        let got: Vec<u16> = dst
+            .chunks_exact(2)
+            .map(|c| u16::from_ne_bytes(c.try_into().unwrap()))
+            .collect();
+        assert_eq!(got, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn a_sample_too_wide_for_its_lane_is_reported() {
+        // The other direction truncates: 9 bits cannot be delivered in a byte, and quietly
+        // dropping the top bit would hand back wrong pixels.
+        let src = [0xFFu8; 8];
+        let mut dst = [0u8; 8];
+        let error = unpack_bits(&src, &mut dst, 9, 4, 8)
+            .expect_err("9 bits into a byte lane should be rejected");
+        match error {
+            TiffError::UnsupportedError(TiffUnsupportedError::UnsupportedBitsPerChannel(got)) => {
+                assert_eq!(got, 9)
+            }
+            other => panic!("wrong error for an oversized sample: {other:?}"),
+        }
     }
 
     #[test]
