@@ -1447,6 +1447,22 @@ impl Image {
 /// # Panics
 ///
 /// Panics if `dst` is too small for `num_samples` output samples.
+/// Does `src` hold enough packed bits for `num_samples` samples of `bits_per_sample`?
+///
+/// Checked once per call rather than per sample, which also makes every read inside the
+/// unpacking loop provably in bounds: `extract_bits_msb_const` computes `src.len() - byte_idx`,
+/// which underflows and panics mid-decode on a truncated or inconsistent chunk.
+fn enough_bits(src: &[u8], num_samples: usize, bits_per_sample: u8) -> TiffResult<()> {
+    // An overflowing sample count and a buffer too short for it are the same diagnosis: the
+    // sizes the file declares do not agree with each other.
+    match num_samples.checked_mul(bits_per_sample as usize) {
+        Some(needed) if src.len().saturating_mul(8) >= needed => Ok(()),
+        _ => Err(TiffError::FormatError(
+            TiffFormatError::InconsistentSizesEncountered,
+        )),
+    }
+}
+
 fn unpack_bits(
     src: &[u8],
     dst: &mut [u8],
@@ -1456,42 +1472,19 @@ fn unpack_bits(
 ) -> TiffResult<()> {
     // Dispatch to const-generic specializations so the compiler can unroll the
     // byte-gathering loop and precompute shift/mask constants.
-    // Enough packed bits to satisfy the request? Checked once per call
-    // rather than per sample, which also makes every read inside the loop
-    // provably in bounds -- `extract_bits_msb_const` computes
-    // `src.len() - byte_idx` and would otherwise underflow and panic on a
-    // short chunk.
-    //
-    // Called from inside the dispatch so the depth is validated first: an
-    // unsupported depth is the more specific diagnosis, and its implied
-    // size is meaningless anyway.
-    let enough_bits = |bps: u8| -> TiffResult<()> {
-        let needed = num_samples
-            .checked_mul(bps as usize)
-            .ok_or(TiffError::FormatError(
-                TiffFormatError::InconsistentSizesEncountered,
-            ))?;
-        if src.len().saturating_mul(8) < needed {
-            return Err(TiffError::FormatError(
-                TiffFormatError::InconsistentSizesEncountered,
-            ));
-        }
-        Ok(())
-    };
-
     macro_rules! dispatch {
         ($($bps:literal),+) => {
             match bits_per_sample {
                 $( $bps => {
-                    enough_bits($bps)?;
+                    // Checked inside the dispatch so the depth is validated first: an
+                    // unsupported depth is the more specific diagnosis, and its implied size
+                    // is meaningless anyway.
+                    enough_bits(src, num_samples, $bps)?;
                     unpack_bits_const::<$bps>(src, dst, num_samples, output_width)
                 } )+
                 // Not a depth this path unpacks. `bits_per_sample` is read
                 // from the file, so this is reachable on a malformed one and
-                // is reported upward. It used to fall through to a BPS=0
-                // specialization that decoded as though the depth were the
-                // output width, which turned a bad file into plausible
-                // garbage pixels with no indication anything was wrong.
+                // is reported upward.
                 other => return Err(TiffError::UnsupportedError(
                     TiffUnsupportedError::UnsupportedBitsPerChannel(other),
                 )),
