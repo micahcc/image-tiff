@@ -1471,7 +1471,6 @@ fn enough_bits(src: &[u8], num_samples: usize, bits_per_sample: u8) -> TiffResul
 /// # Panics
 ///
 /// Panics if `dst` is too small for `num_samples` output samples.
-
 fn unpack_bits(
     src: &[u8],
     dst: &mut [u8],
@@ -1533,11 +1532,8 @@ fn unpack_bits_const<const BPS: u8>(
     match output_width {
         8 => {
             debug_assert!(dst.len() >= num_samples);
-            let mut bit_offset: usize = 0;
-            for i in 0..num_samples {
-                let val = extract_bits_msb_const::<BPS>(src, bit_offset);
-                dst[i] = val as u8;
-                bit_offset += BPS as usize;
+            for (i, out) in dst.iter_mut().take(num_samples).enumerate() {
+                *out = extract_bits_msb_const::<BPS>(src, i * BPS as usize) as u8;
             }
         }
         16 => {
@@ -1761,8 +1757,10 @@ mod unpack_tests {
         let mut dst = [0u8; 8];
         unpack_bits(&src, &mut dst, 2, 4, 16).unwrap();
         let got: Vec<u16> = dst
-            .chunks_exact(2)
-            .map(|c| u16::from_ne_bytes(c.try_into().unwrap()))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_ne_bytes(*c))
             .collect();
         assert_eq!(got, [0, 1, 2, 3]);
     }
