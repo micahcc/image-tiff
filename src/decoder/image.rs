@@ -1431,8 +1431,7 @@ impl Image {
 
 /// Can a `bits_per_sample`-wide sample be delivered in an `output_width`-wide lane?
 ///
-/// Widening is fine: a 2-bit sample in a `u16` lane is just a small value. Narrowing is not --
-/// a 9-bit sample does not fit a byte, and truncating it would hand back wrong pixels.
+/// Widening is fine; narrowing would truncate.
 fn fits_output_width(bits_per_sample: u8, output_width: u8) -> TiffResult<()> {
     if bits_per_sample > output_width {
         return Err(TiffError::UnsupportedError(
@@ -1443,10 +1442,6 @@ fn fits_output_width(bits_per_sample: u8, output_width: u8) -> TiffResult<()> {
 }
 
 /// Does `src` hold enough packed bits for `num_samples` samples of `bits_per_sample`?
-///
-/// Checked once per call rather than per sample, which also makes every read inside the
-/// unpacking loop provably in bounds: `extract_bits_msb_const` computes `src.len() - byte_idx`,
-/// which underflows and panics mid-decode on a truncated or inconsistent chunk.
 fn enough_bits(src: &[u8], num_samples: usize, bits_per_sample: u8) -> TiffResult<()> {
     // An overflowing sample count and a buffer too short for it are the same diagnosis: the
     // sizes the file declares do not agree with each other.
