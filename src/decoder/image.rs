@@ -1477,9 +1477,6 @@ fn unpack_bits(
         ($($bps:literal),+) => {
             match bits_per_sample {
                 $( $bps => {
-                    // Checked inside the dispatch so the depth is validated first: an
-                    // unsupported depth is the more specific diagnosis, and its implied size
-                    // is meaningless anyway.
                     enough_bits(src, num_samples, $bps)?;
                     unpack_bits_const::<$bps>(src, dst, num_samples, output_width)
                 } )+
